@@ -99,6 +99,7 @@
               </button>
             </div>
             <input type="hidden" id="format" value="image/webp" />
+            <p class="hint" id="encHint"></p>
           </div>
 
           <div class="field">
@@ -136,6 +137,22 @@
             />
             <p class="hint" id="qualityHint">
               80–90 looks identical to the original on screen for most photos.
+            </p>
+          </div>
+
+          <div class="field">
+            <label class="label" for="target">Target file size</label>
+            <select id="target">
+              <option value="0">Off (use the quality slider)</option>
+              <option value="50">Under 50 KB</option>
+              <option value="100">Under 100 KB</option>
+              <option value="150" selected>Under 150 KB</option>
+              <option value="200">Under 200 KB</option>
+              <option value="300">Under 300 KB</option>
+            </select>
+            <p class="hint" id="targetHint">
+              Finds the highest quality that fits. If a photo is too big, it
+              gently reduces the width instead of lowering quality too far.
             </p>
           </div>
 
@@ -245,6 +262,7 @@
       </div>
     </div>
 
+    <script src="./webp-encoder.js"></script>
     <script src="./script.js"></script>
   </body>
 </html>

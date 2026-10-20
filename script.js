@@ -18,6 +18,9 @@
     qualityOut: $("qualityOut"),
     qualityHint: $("qualityHint"),
     maxw: $("maxw"),
+    target: $("target"),
+    targetHint: $("targetHint"),
+    encHint: $("encHint"),
     queue: $("queue"),
     queueCount: $("queueCount"),
     saveOne: $("saveOne"),
@@ -67,28 +70,34 @@
   function settings() {
     const type = els.format.value;
     let q = Number(els.quality.value) / 100;
-    return { type, quality: q, maxw: Number(els.maxw.value) };
+    return {
+      type,
+      quality: q,
+      maxw: Number(els.maxw.value),
+      target: Number(els.target.value) * 1024,
+    };
   }
   function supportsType(type) {
     const c = document.createElement("canvas");
     c.width = c.height = 1;
     return c.toDataURL(type).indexOf("data:" + type) === 0;
   }
-  async function encode(item) {
-    const s = settings();
-    let type = s.type;
+  // Quality range used by "Target file size": never go above MAX_Q (no visible
+  // gain, much bigger files) and never below MIN_Q (artefacts start to show
+  // on fine jewellery detail). Below MIN_Q we shrink the width instead.
+  const MAX_Q = 0.95;
+  const MIN_Q = 0.75;
+  const MIN_WIDTH = 600;
+
+  function resolveType(item, type) {
     if (type === "same")
       type = /^image\/(jpeg|png|webp)$/.test(item.origType)
         ? item.origType
         : "image/png";
     if (!supportsType(type)) type = "image/jpeg";
-    const bmp = item.bitmap;
-    let w = bmp.width,
-      h = bmp.height;
-    if (s.maxw && w > s.maxw) {
-      h = Math.round((h * s.maxw) / w);
-      w = s.maxw;
-    }
+    return type;
+  }
+  function drawCanvas(bmp, w, h, type) {
     const c = document.createElement("canvas");
     c.width = w;
     c.height = h;
@@ -100,10 +109,143 @@
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
     ctx.drawImage(bmp, 0, 0, w, h);
-    const blob = await new Promise((res) =>
-      c.toBlob(res, type, type === "image/png" ? undefined : s.quality),
+    return c;
+  }
+  const toBlob = (c, type, q) =>
+    new Promise((res) =>
+      c.toBlob(res, type, type === "image/png" ? undefined : q),
     );
-    return { blob, w, h, type };
+
+  // ---------- high-quality WebP encoder (libwebp in a background worker) ----------
+  // Loaded from webp-encoder.js. Same quality as the browser's encoder at
+  // ~20-25% smaller files (or noticeably sharper at the same size), thanks to
+  // sharper colour conversion (sharp YUV) and the slowest compression method.
+  const PRO_OPTIONS = {
+    method: 6,
+    pass: 1,
+    use_sharp_yuv: 1,
+    sns_strength: 60,
+    filter_strength: 30,
+    filter_sharpness: 2,
+  };
+  let webpWorker = null;
+  let workerId = 0;
+  const pending = new Map();
+  function getWorker() {
+    if (webpWorker !== null) return webpWorker;
+    try {
+      if (!window.__webpWorkerSrc) throw new Error("encoder file missing");
+      const url = URL.createObjectURL(
+        new Blob([window.__webpWorkerSrc], { type: "text/javascript" }),
+      );
+      webpWorker = new Worker(url);
+      webpWorker.onmessage = (e) => {
+        const job = pending.get(e.data.id);
+        if (!job) return;
+        pending.delete(e.data.id);
+        if (e.data.error) job.reject(new Error(e.data.error));
+        else job.resolve(e.data.buf);
+      };
+      webpWorker.onerror = () => {
+        webpWorker = false;
+        pending.forEach((j) => j.reject(new Error("encoder stopped")));
+        pending.clear();
+        showEncoder();
+      };
+    } catch (e) {
+      webpWorker = false;
+    }
+    return webpWorker;
+  }
+  function proWebp(img, q) {
+    const w = getWorker();
+    if (!w) return Promise.reject(new Error("no encoder"));
+    return new Promise((resolve, reject) => {
+      const id = ++workerId;
+      pending.set(id, { resolve, reject });
+      w.postMessage({
+        id,
+        data: img.data,
+        width: img.width,
+        height: img.height,
+        options: { ...PRO_OPTIONS, quality: Math.min(100, q * 100) },
+      });
+    });
+  }
+  function showEncoder() {
+    if (!els.encHint) return;
+    const pro = getWorker();
+    els.encHint.textContent = pro
+      ? "WebP uses the high-quality encoder (smaller files, sharper colours)."
+      : "Using your browser's standard WebP encoder.";
+  }
+
+  async function encode(item) {
+    const s = settings();
+    const type = resolveType(item, s.type);
+    const bmp = item.bitmap;
+    let w = bmp.width,
+      h = bmp.height;
+    if (s.maxw && w > s.maxw) {
+      h = Math.round((h * s.maxw) / w);
+      w = s.maxw;
+    }
+    // One encoder per canvas size: libwebp for WebP when available,
+    // otherwise the browser's built-in encoder.
+    const makeEncoder = (c) => {
+      let img = null;
+      return async (q) => {
+        if (type === "image/webp" && getWorker()) {
+          try {
+            if (!img)
+              img = c.getContext("2d").getImageData(0, 0, c.width, c.height);
+            const buf = await proWebp(img, q);
+            return new Blob([buf], { type });
+          } catch (e) {
+            webpWorker = false;
+            showEncoder();
+          }
+        }
+        return toBlob(c, type, q);
+      };
+    };
+    // Normal mode (or PNG, which has no quality setting): one pass.
+    if (!s.target || type === "image/png") {
+      const enc = makeEncoder(drawCanvas(bmp, w, h, type));
+      const blob = await enc(s.quality);
+      return { blob, w, h, type, q: type === "image/png" ? null : s.quality };
+    }
+    // Target mode: highest quality that fits, shrinking width only if needed.
+    for (let pass = 0; pass < 14; pass++) {
+      const enc = makeEncoder(drawCanvas(bmp, w, h, type));
+      const top = await enc(MAX_Q);
+      if (top.size <= s.target)
+        return { blob: top, w, h, type, q: MAX_Q, hit: true };
+      const low = await enc(MIN_Q);
+      if (low.size <= s.target) {
+        let lo = MIN_Q,
+          hi = MAX_Q,
+          best = { blob: low, q: MIN_Q };
+        for (let i = 0; i < 6; i++) {
+          const mid = (lo + hi) / 2;
+          const b = await enc(mid);
+          if (b.size <= s.target) {
+            best = { blob: b, q: mid };
+            lo = mid;
+          } else hi = mid;
+        }
+        return { blob: best.blob, w, h, type, q: best.q, hit: true };
+      }
+      // Too big even at MIN_Q: make it ~10% narrower and try again.
+      const nw = Math.round(w * 0.9);
+      if (nw < MIN_WIDTH) {
+        return { blob: low, w, h, type, q: MIN_Q, hit: false };
+      }
+      h = Math.round((h * nw) / w);
+      w = nw;
+    }
+    const enc = makeEncoder(drawCanvas(bmp, w, h, type));
+    return { blob: await enc(MIN_Q), w, h, type, q: MIN_Q, hit: false };
   }
 
   // ---------- items ----------
@@ -200,7 +342,9 @@
         pill.textContent = "…";
       } else {
         const pct = Math.round((1 - it.out.blob.size / it.size) * 100);
-        pill.className = "pill " + (pct >= 0 ? "pill--good" : "pill--warn");
+        pill.className =
+          "pill " +
+          (pct >= 0 && it.out.hit !== false ? "pill--good" : "pill--warn");
         pill.textContent = (pct >= 0 ? "−" : "+") + Math.abs(pct) + "%";
       }
       b.append(img, mid, pill);
@@ -247,10 +391,26 @@
         ? it.bitmap.width + " → " + it.out.w + " px"
         : it.out.w + " × " + it.out.h;
       els.sFmt.textContent =
-        nameFor(it.origType) === nameFor(it.out.type)
+        (nameFor(it.origType) === nameFor(it.out.type)
           ? nameFor(it.out.type)
-          : nameFor(it.origType) + " → " + nameFor(it.out.type);
-      if (saved < 0 && !it.sample) {
+          : nameFor(it.origType) + "→" + nameFor(it.out.type)) +
+        (it.out.q ? " q" + Math.round(it.out.q * 100) : "");
+      const tgt = settings().target;
+      if (tgt && it.out.hit === false && !it.sample) {
+        els.note.hidden = false;
+        els.note.className = "note is-warn";
+        els.note.textContent =
+          "This photo can't get under " +
+          tgt / 1024 +
+          " KB without visible quality loss, so it was saved at the smallest high-quality size (" +
+          fmtBytes(it.out.blob.size) +
+          "). Choose a larger target or a smaller maximum width.";
+      } else if (tgt && it.out.type === "image/png" && !it.sample) {
+        els.note.hidden = false;
+        els.note.className = "note is-warn";
+        els.note.textContent =
+          "PNG is always lossless, so the size target doesn't apply. Choose WebP to hit the target.";
+      } else if (saved < 0 && !it.sample) {
         els.note.hidden = false;
         els.note.className = "note is-warn";
         els.note.textContent =
@@ -337,8 +497,21 @@
         ),
       );
     const png = els.format.value === "image/png";
-    els.quality.disabled = png;
-    els.qualityOut.textContent = png ? "lossless" : els.quality.value;
+    const auto = Number(els.target.value) > 0 && !png;
+    els.quality.disabled = png || auto;
+    els.presets.querySelectorAll("button").forEach((b) => (b.disabled = auto));
+    els.qualityOut.textContent = png
+      ? "lossless"
+      : auto
+        ? "auto"
+        : els.quality.value;
+    if (auto) {
+      els.qualityHint.textContent =
+        "Set automatically for each image: the highest quality (up to 95) that fits under " +
+        els.target.value +
+        " KB.";
+      return;
+    }
     const q = Number(els.quality.value);
     els.qualityHint.textContent = png
       ? "PNG keeps every pixel exactly, but files are usually much larger than WebP."
@@ -374,6 +547,10 @@
     reprocess();
   });
   els.maxw.addEventListener("change", reprocess);
+  els.target.addEventListener("change", () => {
+    syncQualityUi();
+    reprocess();
+  });
   function markCustom() {
     const q = Number(els.quality.value),
       f = els.format.value;
@@ -592,6 +769,7 @@
   }
 
   // ---------- boot ----------
+  showEncoder();
   syncQualityUi();
   setSplit(50);
   if (!supportsType("image/webp")) {
