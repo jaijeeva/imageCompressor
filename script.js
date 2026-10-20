@@ -348,7 +348,16 @@
         pill.textContent = (pct >= 0 ? "−" : "+") + Math.abs(pct) + "%";
       }
       b.append(img, mid, pill);
-      b.addEventListener("click", () => select(i));
+      b.addEventListener("click", () => {
+        select(i);
+        // Phones/tablets: panels are stacked, so bring the preview into view.
+        if (window.matchMedia("(max-width: 900px)").matches) {
+          const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+          document
+            .querySelector(".stagewrap")
+            .scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
+        }
+      });
       li.append(b);
       els.queue.append(li);
     });

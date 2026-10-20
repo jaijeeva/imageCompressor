@@ -328,6 +328,21 @@ select {
   gap: 12px;
   min-width: 0;
 }
+/* Desktop: keep the preview in view while the settings / file list scrolls.
+   The stage height is capped so the whole sticky panel (stats, toolbar,
+   image, slider) always fits on screen. */
+@media (min-width: 901px) {
+  .stagewrap {
+    position: sticky;
+    top: 16px;
+    align-self: start;
+    max-height: calc(100vh - 32px);
+  }
+  .stagewrap .stage {
+    max-height: calc(100vh - 300px);
+    min-height: 220px;
+  }
+}
 .stats {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
