@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,viewport-fit=cover"
+    />
+    <style>
+      :root {
+        color-scheme: light;
+        padding-top: env(safe-area-inset-top, 0px);
+        padding-bottom: env(safe-area-inset-bottom, 0px);
+      }
+      body {
+        margin: 0;
+        font:
+          14px system-ui,
+          sans-serif;
+      }
+      img {
+        max-width: 100%;
+      }
+      [hidden] {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <title>Image Squeeze</title>
+    <meta name="claude:viewport-fit-sides" content="cover" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap"
+    />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+
+    <link rel="stylesheet" href="./style.css" />
+
+    <div class="wrap">
+      <header class="top">
+        <div>
+          <h1>Image <span>Squeeze</span></h1>
+          <p class="tagline">
+            Make photos smaller for your website without visible quality loss.
+            Everything runs in your browser; your images are never uploaded
+            anywhere.
+          </p>
+        </div>
+      </header>
+
+      <div class="layout">
+        <aside class="panel" aria-label="Settings and files">
+          <label class="drop" id="drop" for="fileInput">
+            <strong>Drop images here</strong>
+            <small>or click to choose · JPG, PNG, WebP</small>
+          </label>
+          <input
+            id="fileInput"
+            class="vh"
+            type="file"
+            accept="image/jpeg,image/png,image/webp,image/gif,image/bmp"
+            multiple
+          />
+
+          <div class="field">
+            <p class="label" id="formatLabel">Convert to</p>
+            <div
+              class="seg seg--4"
+              id="formats"
+              role="group"
+              aria-labelledby="formatLabel"
+            >
+              <button
+                type="button"
+                data-format="image/webp"
+                aria-pressed="true"
+              >
+                WebP<small>best for web</small>
+              </button>
+              <button
+                type="button"
+                data-format="image/jpeg"
+                aria-pressed="false"
+              >
+                JPG<small>photos</small>
+              </button>
+              <button
+                type="button"
+                data-format="image/png"
+                aria-pressed="false"
+              >
+                PNG<small>lossless</small>
+              </button>
+              <button type="button" data-format="same" aria-pressed="false">
+                Same<small>as original</small>
+              </button>
+            </div>
+            <input type="hidden" id="format" value="image/webp" />
+          </div>
+
+          <div class="field">
+            <p class="label">Quality preset</p>
+            <div
+              class="seg"
+              id="presets"
+              role="group"
+              aria-label="Quality preset"
+            >
+              <button type="button" data-preset="lossless" aria-pressed="false">
+                Lossless<small>exact pixels</small>
+              </button>
+              <button type="button" data-preset="visual" aria-pressed="true">
+                Visually lossless<small>recommended</small>
+              </button>
+              <button type="button" data-preset="small" aria-pressed="false">
+                Smallest<small>slight loss</small>
+              </button>
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="field-row">
+              <label class="label" for="quality">Quality</label
+              ><output id="qualityOut" for="quality">85</output>
+            </div>
+            <input
+              id="quality"
+              type="range"
+              min="40"
+              max="100"
+              step="1"
+              value="85"
+            />
+            <p class="hint" id="qualityHint">
+              80–90 looks identical to the original on screen for most photos.
+            </p>
+          </div>
+
+          <div class="field">
+            <label class="label" for="maxw">Maximum width</label>
+            <select id="maxw">
+              <option value="0">Keep original size</option>
+              <option value="2400">2400 px (large banners)</option>
+              <option value="1600" selected>1600 px (full-width images)</option>
+              <option value="1200">1200 px (product photos)</option>
+              <option value="800">800 px (cards, thumbnails)</option>
+            </select>
+            <p class="hint">
+              Resizing to the size your site actually shows saves the most.
+            </p>
+          </div>
+
+          <div class="field">
+            <div class="field-row">
+              <p class="label">Files</p>
+              <span class="hint" id="queueCount"></span>
+            </div>
+            <ul class="queue" id="queue"></ul>
+          </div>
+
+          <div class="group" style="display: flex; gap: 8px; flex-wrap: wrap">
+            <button
+              class="btn btn--primary"
+              type="button"
+              id="saveOne"
+              disabled
+            >
+              Save this image
+            </button>
+            <button class="btn" type="button" id="saveAll" disabled>
+              Save all (.zip)
+            </button>
+          </div>
+          <p class="status" id="status" role="status" aria-live="polite"></p>
+        </aside>
+
+        <section class="stagewrap" aria-label="Comparison">
+          <div class="stats" id="stats">
+            <div class="stat">
+              <span class="label">Original</span><b id="sOrig">–</b>
+            </div>
+            <div class="stat">
+              <span class="label">Compressed</span><b id="sNew">–</b>
+            </div>
+            <div class="stat" id="sSaveBox">
+              <span class="label">Saved</span><b id="sSave">–</b>
+            </div>
+            <div class="stat">
+              <span class="label">Dimensions</span><b id="sDim">–</b>
+            </div>
+            <div class="stat">
+              <span class="label">Format</span><b id="sFmt">–</b>
+            </div>
+          </div>
+
+          <div class="toolbar">
+            <div
+              class="group seg"
+              style="grid-template-columns: repeat(2, auto)"
+              role="group"
+              aria-label="Zoom"
+            >
+              <button type="button" id="zFit" aria-pressed="true">Fit</button>
+              <button type="button" id="z100" aria-pressed="false">
+                100% (pixel check)
+              </button>
+            </div>
+            <span class="hint">Drag across the image to compare</span>
+          </div>
+
+          <div class="stage" id="stage">
+            <div class="empty" id="empty">
+              Add an image to compare before and after.
+            </div>
+            <div class="frame" id="frame" hidden>
+              <img id="imgAfter" alt="Compressed version" />
+              <div class="before">
+                <img id="imgBefore" alt="Original version" />
+              </div>
+              <div class="divider">
+                <div class="knob" aria-hidden="true">⇆</div>
+              </div>
+              <span class="tag tag--l">Original</span>
+              <span class="tag tag--r">Compressed</span>
+            </div>
+          </div>
+          <label class="vh" for="split">Comparison position</label>
+          <input
+            id="split"
+            type="range"
+            min="0"
+            max="100"
+            value="50"
+            aria-label="Comparison position"
+          />
+
+          <p class="note" id="note">
+            This is a built-in sample so you can try the slider. Add your own
+            photos to replace it.
+          </p>
+        </section>
+      </div>
+    </div>
+
+    <script src="./script.js"></script>
+  </body>
+</html>
